@@ -1,0 +1,229 @@
+from aiogram import Bot, types
+from aiogram.dispatcher import Dispatcher
+from aiogram.utils import executor
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.dispatcher.filters import Text
+from aiogram.utils.callback_data import CallbackData
+from aiogram.types import ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton, \
+    InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.markdown import text, bold, italic, code, pre
+from aiogram.types import ParseMode, InputMediaPhoto, InputMediaVideo, ChatActions
+from aiogram.utils.helper import Helper, HelperMode, ListItem
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
+from aiogram.types.input_file import InputFile
+
+import asyncio
+import nest_asyncio
+
+from sqlite3 import Error
+import sqlite3
+
+nest_asyncio.apply()
+
+greeting_1 = 'Предлагаем пройти 5 точек квеста в любой последовательности в фойе Крокуса:\n\t1. Найдите кодовые слова в 5 точках, указанных на карте \n\t2. Напишите в чат-бот кодовое слово и ответьте на всплывающий вопрос \n\t3. Те, кто правильно ответил на все вопросы, будут участвовать в розыгрыше'
+greeting_2 = 'Умры'
+greeting_3 = ', который мы проведём в фойе на 2 этаже в '
+greeting_4 = '17:20'
+QUESTIONS = {'Сколько лет ниспосылался Священный Коран?': ['4 года', '10 лет', '23 года', '40 лет'],
+             'Что самое лучшее, согласно хадису, что родитель может дать ребёнку?': ['Хорошее воспитание',
+                                                                                     'Богатое наследство',
+                                                                                     'Личностное развитие',
+                                                                                     'Сильное окружение'],
+             'Как звучит на арабском языке слово Книга?': ['Курсий', 'Мактаб', 'Китаб', 'Калям'],
+             'Кем был послан на Землю посланник Аллаха, мир ему?': ['справедливостью для миров', 'милостью для миров',
+                                                                    'назиданием для миров', 'прощением для миров'],
+             'Поиск знаний - обязанность каждого мусульманина. Что для этого необходимо?': ['Пройти мимо',
+                                                                                            'Ждать случая',
+                                                                                            'Оставить на потом',
+                                                                                            'Учиться в КЦ Дар']}
+
+answers = {'Сколько лет ниспосылался Священный Коран?': 3,
+             'Что самое лучшее, согласно хадису, что родитель может дать ребёнку?': 1,
+             'Как звучит на арабском языке слово Книга?': 3,
+             'Кем был послан на Землю посланник Аллаха, мир ему?': 2,
+             'Поиск знаний - обязанность каждого мусульманина. Что для этого необходимо?': 4}
+
+keywords = {'нравственность': 'Сколько лет ниспосылался Священный Коран?',
+            'искренность': 'Что самое лучшее, согласно хадису, что родитель может дать ребёнку?',
+            'совершенство': 'Как звучит на арабском языке слово Книга?',
+            'любовь': 'Кем был послан на Землю посланник Аллаха, мир ему?',
+            'благородство': 'Поиск знаний - обязанность каждого мусульманина. Что для этого необходимо?'}
+instruction_1 = 'Предлагаем пройти 5 точек в любой последовательности в фойе Крокуса и ответить на 5 интересных вопросов. \n\t1. Найдите кодовые слова в 5 точках, указанных на карте \n\t2. Напишите в чат-бот кодовое слово и ответьте на всплывающий вопрос \n\t3. Те, кто правильно ответил на все вопросы, будут участвовать в розыгрыше'
+
+
+def create_connection(db_file):
+    """ create a database connection to a SQLite database """
+    conn = None
+    try:
+        conn = sqlite3.connect(db_file)
+        print(sqlite3.version)
+        return conn
+    except Error as e:
+        print(e)
+    finally:
+        if conn:
+            conn.close()
+			
+def generate_markup(answers):
+    markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    for item in answers:
+        markup.add(item)
+    return markup
+
+
+def generate_markup_inline(answers):
+    inline_kb_full = InlineKeyboardMarkup(row_width=2)
+    inline_btn_1 = InlineKeyboardButton(answers[0], callback_data='btn1')
+    inline_btn_2 = InlineKeyboardButton(answers[1], callback_data='btn2')
+    inline_kb_full.add(inline_btn_1, inline_btn_2)
+    inline_btn_3 = InlineKeyboardButton(answers[2], callback_data='btn3')
+    inline_btn_4 = InlineKeyboardButton(answers[3], callback_data='btn4')
+    inline_kb_full.add(inline_btn_3, inline_btn_4)
+    return inline_kb_full
+
+
+def generate_markup_inline_2(answers):
+    inline_kb_full = InlineKeyboardMarkup(row_width=2)
+    inline_btn_1 = InlineKeyboardButton(answers[0], callback_data='btp1')
+    inline_btn_2 = InlineKeyboardButton(answers[1], callback_data='btp2')
+    inline_kb_full.add(inline_btn_1, inline_btn_2)
+    inline_btn_3 = InlineKeyboardButton(answers[2], callback_data='btp3')
+    inline_btn_4 = InlineKeyboardButton(answers[3], callback_data='btp4')
+    inline_kb_full.add(inline_btn_3)
+    inline_kb_full.add(inline_btn_4)
+    return inline_kb_full
+
+
+bot = Bot(token="")
+dp = Dispatcher(bot)#, storage=MemoryStorage())
+#dp.middleware.setup(LoggingMiddleware())
+
+scores = {}
+passed_questions = {}
+current_answer = {}
+names = {}
+certificate_k = InputFile("certificate_k.jpg")
+certificate_d = InputFile("certificate_d.jpg")
+invitation_ak = InputFile("invitation_ak.jpg")
+invitation_2 = InputFile("invitation_2.jpg")
+map_first = 'BQACAgIAAxkBAAIDsWCftKgzemClGq57ZhHIPY44Hr91AALpEAACErwAAUlM5R4EzF6Y1R8E' #InputFile("map_first.jpeg")
+program = InputFile("program.jpeg")
+
+markup = types.ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+markup.add("Начать (продолжить) квест")
+markup.add("Посмотреть карту (список точек квеста)")
+markup.add("Инструкция")
+markup.add("Программа фойе")
+
+#db_file = r"C:\Users\bginiyatullin\Downloads\pythonsqlite.db"
+conn = create_connection(db_file)
+cur = conn.cursor()
+cur.execute(f'CREATE TABLE IF NOT EXISTS "users" ("user_id", "passed_questions" TEXT)')
+cur.execute(f'CREATE TABLE IF NOT EXISTS "users_score" ("user_id", "score")')
+cur.execute(f'CREATE TABLE IF NOT EXISTS "winners" ("user_id", "name")')
+
+@dp.message_handler(commands=["start"])
+async def cmd_start(message: types.Message):
+    await message.answer(text(greeting_1, bold(greeting_2), greeting_3, bold(greeting_4), sep=' '), reply_markup=markup,
+                         parse_mode=ParseMode.MARKDOWN)
+    scores[str(message.from_user.id)] = 0
+    passed_questions[str(message.from_user.id)] = []
+    current_answer[str(message.from_user.id)] = []
+
+
+@dp.message_handler(lambda message: message.text == "Посмотреть карту (список точек квеста)")
+async def cmd_map(message: types.Message):
+    caption = 'Карта фойе'
+    await message.reply_document(map_first, caption=caption , parse_mode='html', reply_markup=markup)
+
+
+@dp.message_handler(lambda message: message.text == "Инструкция")
+async def action_instruction(message: types.Message):
+    await message.answer(text(instruction_1, bold(greeting_2), greeting_3, bold(greeting_4), sep=' '), parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+
+@dp.message_handler(lambda message: message.text == "Программа фойе")
+async def action_program(message: types.Message):
+    caption = "Программа фойе"
+    await message.reply_photo(program, parse_mode='html', caption=caption, reply_markup=markup)
+
+@dp.message_handler(lambda message: message.text == "Начать (продолжить) квест")
+async def action_begin(message: types.Message):
+        await message.answer('Введите кодовое слово', reply_markup=ReplyKeyboardRemove())
+
+async def send_quest(quest, message):
+    if quest in passed_questions[str(message.from_user.id)]:
+        await bot.send_message(message.from_user.id, 'Вы уже отвечали на этот вопрос. Введите другое кодовое слово',
+                               reply_markup=ReplyKeyboardRemove())
+        return
+
+    current_answer[str(message.from_user.id)] = [message.text.lower(), answers[quest]]
+    markup_inline = generate_markup_inline(QUESTIONS[quest])
+    #f_data.write(f"{message.from_user.id} started quest {quest}")
+    await message.answer(quest, reply_markup=markup_inline)
+
+@dp.message_handler(lambda message: message.text.lower() == "нравственность")
+async def question_1(message: types.Message):
+    print(message.text.lower())
+    quest = keywords[message.text.lower()]
+    await send_quest(quest, message)
+
+
+@dp.message_handler(lambda message: message.text.lower() == "любовь")
+async def question_2(message: types.Message):
+    print(message.text.lower())
+    quest = keywords[message.text.lower()]
+    await send_quest(quest, message)
+    
+def send_prize(question):
+    caption, document = None, None
+    if question == 'нравственность':
+        caption = 'Вы выиграли сертификат'
+        document = certificate_k
+    elif question == 'любовь':
+        caption = 'Приглашение для вас'
+        document = invitation_2
+
+    return caption, document    
+
+
+@dp.callback_query_handler()
+async def process_answer(call: types.CallbackQuery):
+    code = call.data[-1]
+    if code.isdigit():
+        code = int(code)
+    correct = current_answer[str(call.from_user.id)][-1]
+    quest_name = current_answer[str(call.from_user.id)][0]
+    passed_questions[str(call.from_user.id)] += [quest_name]
+    if code == correct:
+        caption, document = send_prize(quest_name)
+        if caption is not None:
+            await bot.send_photo(call.from_user.id, document, parse_mode='html', caption=caption)
+        await bot.send_message(call.from_user.id, 'Правильно. Введите следующее кодовое слово', reply_markup=ReplyKeyboardRemove())
+        scores[str(call.from_user.id)] += 1
+        #f_data.write(str(call.from_user.id) + f'answered correctly {call.from_user.id[0]} and has {scores[call.from_user.id]} points')
+
+    else:
+        await bot.send_message(call.from_user.id, 'Неправильно. Введите следующее кодовое слово', reply_markup=ReplyKeyboardRemove())
+
+    if len(passed_questions[str(call.from_user.id)]) == 2:
+        if scores[str(call.from_user.id)] == 2:
+            await bot.send_message(call.from_user.id, 'Поздравляем! Вы правильно ответили на все вопросы',
+                                   reply_markup=ReplyKeyboardRemove())
+        else:
+            await bot.send_message(call.from_user.id, 'Спасибо за участие в викторине. К сожалению, вам чуть-чуть не хватило до победы',
+                                   reply_markup=ReplyKeyboardRemove())
+
+@dp.message_handler(lambda message: message.text.lower().startswith('-'))
+async def fix_name(message: types.Message):
+    if scores[str(message.from_user.id)] == 2:
+        names[str(message.from_user.id)] = message.text[1:]
+        #f_data.write(f"{message.text} выиграл\n")
+        #f_data.flush()
+        #winners.write(f"{message.text} {message.from_user.id}\n")
+        #winners.flush()
+        await bot.send_message(message.from_user.id, "Спасибо! Вы зарегистрированы на розыгрыш")
+        
+
+if __name__ == "__main__":
+    executor.start_polling(dp, skip_updates=True)
